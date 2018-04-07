@@ -7,6 +7,7 @@ import Control.Monad.ST as ST
 import DOM.HTML.Event.ErrorEvent as ErrorEvent
 import DOM.Websocket.Event.CloseEvent as CloseEvent
 import Data.List as List
+import Data.Array as Array
 import Data.StrMap as StrMap
 import Data.StrMap.ST as SM
 import Data.StrMap.ST.Unsafe as ST
@@ -23,11 +24,9 @@ import DOM.Websocket.Event.Types (CloseEvent, MessageEvent)
 import Data.Argonaut.Core (Json)
 import Data.Argonaut.Generic.Aeson (encodeJson, decodeJson)
 import Data.Argonaut.Parser (jsonParser)
-import Data.Argonaut.Printer (printJson)
 import Data.Bifunctor (lmap)
 import Data.Either (Either(Right, Left))
 import Data.Foldable (traverse_, sequence_, elem, intercalate, foldl)
-import Data.Function.Eff (EffFn2, runEffFn2)
 import Data.Function.Uncurried (Fn4)
 import Data.Generic (gShow, gEq, gCompare, class Generic)
 import Data.Lens ((^.), view, prism, (.~), _Just, _2)
@@ -46,6 +45,7 @@ import Servant.Subscriber.Response (HttpResponse)
 import Servant.Subscriber.Types (Path(Path))
 import Unsafe.Coerce (unsafeCoerce)
 import WebSocket (WEBSOCKET, Message(Message), ReadyState(Open), newWebSocket)
+import Control.Monad.Eff.Uncurried
 
 type SubscriberEff eff = Eff (ref :: REF, ws :: WEBSOCKET, err :: EXCEPTION | eff)
 
@@ -124,10 +124,10 @@ realize impl = do
 -- | Takes care of actually subscribing stuff.
 sendRequests :: forall eff a. WS.Connection -> Connection eff a -> SubscriberEff eff Unit
 sendRequests (WS.Connection conn) impl = do
-      ordered <- List.filter ((_ == Ordered) <<< _.state) <<< StrMap.values <$> Ref.readRef impl.orders
+      ordered <- Array.filter ((_ == Ordered) <<< _.state) <<< StrMap.values <$> Ref.readRef impl.orders
       let
         mkMsg :: Request -> Message
-        mkMsg = Message <<< printJson <<< encodeJson
+        mkMsg = Message <<< show <<< encodeJson
 
         msgs = map (mkMsg <<< _.req) ordered
 
@@ -183,7 +183,7 @@ closeHandler impl ev = do
 
     updateSubscriptions :: Orders a -> Orders a
     updateSubscriptions subs = let
-          forRemoval = map fst <<< List.filter (isUnsubscribe <<< view (_2 <<< req)) <<< StrMap.toList $ subs
+          forRemoval = map fst <<< List.filter (isUnsubscribe <<< view (_2 <<< req)) <<< StrMap.toUnfoldable $ subs
           cleanedSubs = foldl (flip StrMap.delete) subs forRemoval
         in
           map ( _ { state = Ordered } ) cleanedSubs
@@ -229,7 +229,7 @@ onlyIfSent req' action orders' =
      _    -> orders'
 
 handleDelete :: forall a. Path -> Orders a -> Orders a
-handleDelete p = StrMap.fromFoldable <<< filter canStay <<< StrMap.toList
+handleDelete p = StrMap.fromFoldable <<< filter canStay <<< StrMap.toUnfoldable
   where
     canStay :: Tuple String (Order a) -> Boolean
     canStay (Tuple _ order) = let req' = runHttpRequest $ getHttpReq order.req
@@ -237,8 +237,8 @@ handleDelete p = StrMap.fromFoldable <<< filter canStay <<< StrMap.toList
                                (not <<< eqPath) req'.httpPath p || order.state /= Confirmed -- Only delete if already successfully subscribed!
 
 
-getOrdersByPath :: forall a. Path -> Orders a -> List (Order a)
-getOrdersByPath path = filter (eqPath path <<< getPath <<< _.req) <<< StrMap.values
+getOrdersByPath :: forall a. Path -> Orders a -> Array (Order a)
+getOrdersByPath path = Array.filter (eqPath path <<< getPath <<< _.req) <<< StrMap.values
 
 doCallback :: forall eff a. HttpRequest -> Maybe String -> Connection eff a -> SubscriberEff eff Unit
 doCallback req' res impl = do
@@ -269,7 +269,7 @@ match :: forall a. Eq a => a -> Prism' a a
 match a = prism id $ \b -> if a == b then Right a else Left b
 
 
-try :: forall a eff. Eff (err :: EXCEPTION | eff) a -> Eff eff (Either Error a)
+-- try :: forall a err eff. Eff (err :: EXCEPTION | eff) a -> Eff eff (Either Error a)
 try action = catchException (pure <<< Left) (map Right action)
 
 eqPath :: Path -> Path -> Boolean
@@ -291,8 +291,8 @@ runHttpRequest (HttpRequest req') = req'
 mutate :: forall a b. (forall h . SM.STStrMap h a -> Eff (st :: ST.ST h ) b) -> StrMap a -> StrMap a
 mutate f m = ST.pureST (do
   s <- myThawST m
-  f s
-  ST.unsafeGet s)
+  _ <- f s
+  ST.unsafeFreeze s)
 
 foreign import _lookup :: forall a z. Fn4 z (a -> z) String (StrMap a) z
 

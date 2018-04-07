@@ -14,7 +14,7 @@ import Control.Monad.Eff (Eff)
 import Control.Monad.ST (ST)
 import Data.Function.Uncurried (runFn4)
 import Data.Generic (gShow)
-import Data.List (List(Nil, Cons))
+import Data.List (List(Nil, Cons), fromFoldable)
 import Data.Monoid (class Monoid)
 import Data.StrMap (StrMap, foldM)
 import Data.StrMap.ST (STStrMap)
@@ -31,10 +31,10 @@ makeSubscriptions req' parser = Subscriptions $ StrMap.singleton (gShow req')
     }
 
 toList :: forall a. Subscriptions a -> List (Subscription a)
-toList (Subscriptions a) = StrMap.values a
+toList (Subscriptions a) = fromFoldable $ StrMap.values a
 
 -- | Number of subscriptions
-size :: forall a. Subscriptions a -> Number
+size :: forall a. Subscriptions a -> Int
 size (Subscriptions m) = StrMap.size m
 
 mergeParsers :: forall a. Subscription a -> Subscription a -> Subscription a
